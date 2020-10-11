@@ -1,0 +1,19 @@
+{
+    "compilerOptions": {
+        "module": "ES2015",
+        "moduleResolution": "node",
+        "charset": "utf8",
+        "target": "ES6",
+        "downlevelIteration": true,
+        "noImplicitReturns": true,
+        "noImplicitAny": true,
+        "strictNullChecks": true,
+        "strictFunctionTypes": true,
+        "noEmit": true,
+        "experimentalDecorators": true,
+        "resolveJsonModule": true
+    },
+    "include": [
+        "ts/**/*"
+    ],
+}

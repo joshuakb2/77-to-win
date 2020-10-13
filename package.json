@@ -4,13 +4,12 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "make": "npm run make-elm && npm run make-ts && npm run make-worker && npm run unzip-maps",
-    "make-debug": "npm run make-elm-debug && npm run make-ts && npm run make-worker && npm run unzip-maps",
+    "make": "npm run make-elm && npm run make-ts && npm run make-worker",
+    "make-debug": "npm run make-elm-debug && npm run make-ts && npm run make-worker",
     "make-worker": "cd src && rollup -c rollup.worker-config.js",
     "make-elm": "cd src/elm && elm make --output=../main.js Main.elm",
     "make-elm-debug": "cd src/elm && elm make --output=../main.js --debug Main.elm",
     "make-ts": "cd src && rollup -c rollup.config.js",
-    "unzip-maps": "for z in *.json.zip src/maps/*.json.zip; do if ! [[ -f ${z%.zip} ]]; then unzip -d $(dirname $z) $z; fi; done",
     "elm": "elm",
     "tsc": "tsc"
   },

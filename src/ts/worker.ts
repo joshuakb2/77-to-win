@@ -26,11 +26,13 @@ onmessage = function(e) {
     let request: WorkerRequest = e.data;
 
     switch (request.type) {
-        case 'calculatePath':
-            if (previousWidth !== request.width || previousHeight !== request.height) {
+        case 'calculatePath': {
+            let { mapType, firstNumNeeded, width, height } = request;
+
+            if (previousWidth !== width || previousHeight !== height) {
                 tunedProjection = undefined;
-                previousWidth = request.width;
-                previousHeight = request.height;
+                previousWidth = width;
+                previousHeight = height;
             }
 
             currentRequestToken = Symbol();
@@ -38,14 +40,24 @@ onmessage = function(e) {
             queuedRequestsComplete = queuedRequestsComplete.then(() =>
                 calculatePath(
                     currentRequestToken,
-                    request.mapType,
-                    request.firstNumNeeded,
-                    request.width,
-                    request.height
+                    mapType,
+                    firstNumNeeded,
+                    width,
+                    height
                 ).catch(err => {
                     console.error(err.stack);
                 })
             );
+            break;
+        }
+
+        case 'halt': {
+            currentRequestToken = Symbol();
+
+            queuedRequestsComplete.then(() => {
+                postMessage({ type: 'halted' });
+            });
+        }
     }
 };
 

@@ -27,6 +27,7 @@ interface PathPresent {
 
 const districtPaths = new Map<MapType, Map<number, PathStatus>>();
 const dataUpdateListeners = new Set<() => void>();
+const workerHaltedListeners = new Set<() => void>();
 
 onWorkerResponse(response => {
     switch (response.type) {
@@ -63,6 +64,10 @@ onWorkerResponse(response => {
 
             dataUpdateListeners.forEach(f => f());
         }   break;
+
+        case 'halted':
+            workerHaltedListeners.forEach(f => f());
+            break;
     }
 });
 
@@ -72,12 +77,15 @@ class MapOfTexas extends HTMLElement {
     districtInfos: District[] | undefined;
     connected: boolean;
     onDistrictsUpdated: () => void;
+    onWorkerHalted: () => void;
     renderState: RenderState;
+    waitingForWorkerHalt: boolean;
 
     constructor() {
         super();
         this.attachShadow({ mode: 'open' });
         this.connected = false;
+        this.waitingForWorkerHalt = false;
         this.renderState = 'none';
     }
 
@@ -96,6 +104,13 @@ class MapOfTexas extends HTMLElement {
 
         dataUpdateListeners.add(this.onDistrictsUpdated);
 
+        this.onWorkerHalted = () => {
+            this.waitingForWorkerHalt = false;
+            this.update();
+        };
+
+        workerHaltedListeners.add(this.onWorkerHalted);
+
         this.districtInfos = parseDistricts(districts);
         this.update();
     }
@@ -105,6 +120,7 @@ class MapOfTexas extends HTMLElement {
         this.renderState = 'none';
         this.shadowRoot!.innerHTML = '';
         dataUpdateListeners.delete(this.onDistrictsUpdated);
+        workerHaltedListeners.delete(this.onWorkerHalted);
     }
 
     static get observedAttributes() {
@@ -122,11 +138,14 @@ class MapOfTexas extends HTMLElement {
 
         switch (name) {
             case 'width':
-            case 'height':
+            case 'height': {
                 this.renderState = 'none';
                 districtPaths.clear();
+                this.waitingForWorkerHalt = true;
+                submitWorkerRequest({ type: 'halt' });
                 this.update();
                 break;
+            }
 
             case 'map-type':
                 this.renderState = 'none';
@@ -174,6 +193,11 @@ class MapOfTexas extends HTMLElement {
             return;
         }
 
+        if (this.waitingForWorkerHalt) {
+            this.showLoading();
+            return;
+        };
+
         if (!allDistrictsArePresent(mapType)) {
             this.showLoading();
             this.requestDistrictPaths();
@@ -187,12 +211,14 @@ class MapOfTexas extends HTMLElement {
         let mapType: MapType = this.getAttribute('map-type') as MapType;
 
         if (this.renderState === 'loading') {
-            this.shadowRoot!.querySelector('#loading-span')!.textContent = getLoadingText(mapType);
+            this.shadowRoot!.querySelector('#loading-text')!.textContent = getLoadingText(mapType);
         };
+
+        let fontSize = `${Math.min(window.innerWidth, 800) / 40}px`;
 
         this.shadowRoot!.innerHTML = `
             <div style="width: ${this.getAttribute('width')}px; height: ${this.getAttribute('height')}px; text-align: center;">
-                <span id="loading-span" style="font-size: 24pt">${getLoadingText(mapType)}</span>
+                <div id="loading-text" style="font-size: ${fontSize}">${getLoadingText(mapType)}</div>
             </div>
         `;
         this.renderState = 'loading';
@@ -247,6 +273,10 @@ class MapOfTexas extends HTMLElement {
         let height = this.getAttribute('height');
 
         if (!mapType || !width || !height) {
+            return;
+        }
+
+        if (getDistrictCount(mapType) !== this.districtInfos?.length) {
             return;
         }
 

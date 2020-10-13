@@ -4,19 +4,17 @@ import Array exposing (Array)
 import Browser exposing (Document, UrlRequest(..), application)
 import Browser.Dom exposing (Element)
 import Browser.Navigation as Nav
-import DataTypes exposing (Party(..), partyStringDecoder)
-import Element exposing (Attribute, Element, el, text)
-import Element.Background as Background
+import DataTypes exposing (AllMapsParties, MapType(..), Party(..), allMapsPartiesDecoder, defaultAllMapsParties, encodeAllMapsParties, mapTypeToString)
+import Element exposing (Attribute, Color, Element, el, text)
 import Element.Border as Border
 import Element.Font as Font
 import Element.Input as Input
-import Html exposing (Html)
-import Html.Attributes exposing (attribute, default)
+import Html
+import Html.Attributes exposing (attribute)
 import Json.Decode as D exposing (Decoder, Value)
 import Json.Encode as E
-import Ports exposing (consoleError, setDistrictParty, writeLocalStorage)
+import Ports exposing (consoleError, setDistrictParty, windowResized, writeLocalStorage)
 import Url exposing (Url)
-import Url.Parser
 
 
 main : Program Value Model Msg
@@ -33,68 +31,36 @@ main =
 
 type Model
     = FatalError String
-    | Normal
-        { key : Nav.Key
-        , districts : Array Party
-        , windowWidth : Int
-        , currentUrl : Url
-        , mapType : MapType
-        }
+    | Normal NormalModel
 
 
-type MapType
-    = Senate
-    | House
-    | Congress
-
-
-mapTypeToString : MapType -> String
-mapTypeToString mapType =
-    case mapType of
-        Senate ->
-            "senate"
-
-        House ->
-            "house"
-
-        Congress ->
-            "congress"
-
-
-districtCount : MapType -> Int
-districtCount mapType =
-    case mapType of
-        Senate ->
-            31
-
-        House ->
-            150
-
-        Congress ->
-            36
+type alias NormalModel =
+    { key : Nav.Key
+    , windowWidth : Int
+    , currentUrl : Url
+    , mapType : MapType
+    , parties : AllMapsParties
+    }
 
 
 type Msg
     = DistrictPartyChanged Int Party
-    | MapToggled
+    | MapChosen MapType
+    | WindowResized Int
     | FatalErrorOccurred String
     | Noop String
 
 
-flagDecoder : MapType -> Decoder ( Int, Array Party )
-flagDecoder mapType =
+flagDecoder : Decoder ( Int, AllMapsParties )
+flagDecoder =
     D.map2 Tuple.pair
         (D.field "width" D.int)
-        (D.oneOf
-            [ D.field "districts" partyStringDecoder
-            , D.succeed (defaultDistricts mapType)
-            ]
-        )
+        (onDecoderFail defaultAllMapsParties (D.field "parties" allMapsPartiesDecoder))
 
 
-defaultDistricts : MapType -> Array Party
-defaultDistricts mapType =
-    Array.initialize (districtCount mapType) (always Republican)
+onDecoderFail : a -> Decoder a -> Decoder a
+onDecoderFail default decoder =
+    D.oneOf [ decoder, D.succeed default ]
 
 
 init : Value -> Url -> Nav.Key -> ( Model, Cmd Msg )
@@ -103,14 +69,14 @@ init flags url key =
         mapType =
             Senate
     in
-    case D.decodeValue (flagDecoder mapType) flags of
-        Ok ( width, districts ) ->
+    case D.decodeValue flagDecoder flags of
+        Ok ( width, parties ) ->
             ( Normal
                 { key = key
-                , districts = districts
                 , windowWidth = width
                 , currentUrl = url
                 , mapType = mapType
+                , parties = parties
                 }
             , Cmd.none
             )
@@ -129,10 +95,10 @@ view model =
             Element.column
                 [ Element.height Element.fill
                 , Element.centerX
+                , Element.spacing 10
                 ]
                 [ header
                 , mainContent model
-                , toggleMapButton
                 , footer
                 ]
     }
@@ -169,31 +135,101 @@ footer =
         )
 
 
-mainContent : Model -> Element msg
+mapSelector : NormalModel -> Element Msg
+mapSelector m =
+    Element.row
+        [ Element.centerX
+        , Element.spacing 50
+        ]
+        [ chooseMapButton "Senate" Senate m.mapType
+        , chooseMapButton "House" House m.mapType
+        , chooseMapButton "Congressional" Congress m.mapType
+
+        -- , chooseMapButton "Board of Education" Education m.mapType
+        ]
+
+
+chooseMapButton : String -> MapType -> MapType -> Element Msg
+chooseMapButton label chosenMap currentMap =
+    Input.button
+        (if chosenMap == currentMap then
+            [ Font.bold, Font.underline ]
+
+         else
+            []
+        )
+        { onPress = Just (MapChosen chosenMap)
+        , label = text label
+        }
+
+
+mainContent : Model -> Element Msg
 mainContent model =
     case model of
         FatalError err ->
             text err
 
         Normal m ->
-            el []
-                (Element.html
-                    (mapOfTexas
-                        [ attribute "width" "800"
-                        , attribute "height" "800"
-                        , attribute "districts" (getDistrictsString m.districts)
-                        , attribute "map-type" (mapTypeToString m.mapType)
-                        ]
-                    )
-                )
+            let
+                parties =
+                    getPartiesForMapType m.mapType m.parties
+
+                mapSide =
+                    String.fromInt (getMapWidth m.windowWidth)
+            in
+            Element.column
+                [ Element.spacing 10
+                ]
+                [ mapSelector m
+                , partyTallyElement parties
+                , mapOfTexas
+                    [ attribute "width" mapSide
+                    , attribute "height" mapSide
+                    , attribute "districts" (getDistrictsString parties)
+                    , attribute "map-type" (mapTypeToString m.mapType)
+                    ]
+                ]
 
 
-toggleMapButton : Element Msg
-toggleMapButton =
-    Input.button []
-        { label = text "Toggle loaded map"
-        , onPress = Just MapToggled
-        }
+getMapWidth : Int -> Int
+getMapWidth windowWidth =
+    min 800 (windowWidth - 20)
+
+
+getPartiesForMapType : MapType -> AllMapsParties -> Array Party
+getPartiesForMapType mapType =
+    case mapType of
+        Senate ->
+            .senateParties
+
+        House ->
+            .houseParties
+
+        Congress ->
+            .congressParties
+
+
+
+-- Education ->
+--     .educationParties
+
+
+updatePartiesForMapType : MapType -> (Array Party -> Array Party) -> AllMapsParties -> AllMapsParties
+updatePartiesForMapType mapType f parties =
+    case mapType of
+        Senate ->
+            { parties | senateParties = f parties.senateParties }
+
+        House ->
+            { parties | houseParties = f parties.houseParties }
+
+        Congress ->
+            { parties | congressParties = f parties.congressParties }
+
+
+
+-- Education ->
+--     { parties | educationParties = f parties.educationParties }
 
 
 pageAttrs : List (Attribute msg)
@@ -205,9 +241,44 @@ pageAttrs =
     ]
 
 
-mapOfTexas : List (Html.Attribute msg) -> Html msg
+partyTallyElement : Array Party -> Element msg
+partyTallyElement parties =
+    let
+        ( democrats, republicans ) =
+            tallyParties (Array.toList parties)
+    in
+    Element.column [ Element.centerX ]
+        [ el [ Font.color blue ] (text ("Democrats: " ++ String.fromInt democrats))
+        , el [ Font.color red ] (text ("Republicans: " ++ String.fromInt republicans))
+        ]
+
+
+blue : Color
+blue =
+    Element.rgb 0 0 1
+
+
+red : Color
+red =
+    Element.rgb 1 0 0
+
+
+tallyParties : List Party -> ( Int, Int )
+tallyParties parties =
+    case parties of
+        [] ->
+            ( 0, 0 )
+
+        Democrat :: rest ->
+            Tuple.mapFirst ((+) 1) (tallyParties rest)
+
+        Republican :: rest ->
+            Tuple.mapSecond ((+) 1) (tallyParties rest)
+
+
+mapOfTexas : List (Html.Attribute msg) -> Element msg
 mapOfTexas attrs =
-    Html.node "map-of-texas" attrs []
+    el [] <| Element.html <| Html.node "map-of-texas" attrs []
 
 
 getDistrictsString : Array Party -> String
@@ -233,40 +304,22 @@ update msg model =
 
         ( DistrictPartyChanged index party, Normal m ) ->
             let
-                newDistricts =
-                    Array.set index party m.districts
+                newParties =
+                    updatePartiesForMapType m.mapType (Array.set index party) m.parties
             in
-            ( Normal { m | districts = newDistricts }
-            , let
-                newDistrictsString =
-                    getDistrictsString newDistricts
-              in
-              Cmd.batch
-                [ writeLocalStorage "districts" (E.string newDistrictsString)
+            ( Normal { m | parties = newParties }
+            , Cmd.batch
+                [ writeLocalStorage "parties" (encodeAllMapsParties newParties)
 
                 -- , Nav.replaceUrl m.key (Url.toString (setDistrictsQueryParam newDistrictsString m.currentUrl))
                 ]
             )
 
-        ( MapToggled, Normal m ) ->
-            let
-                newMapType =
-                    if m.mapType == Senate then
-                        House
+        ( MapChosen newMapType, Normal m ) ->
+            ( Normal { m | mapType = newMapType }, Cmd.none )
 
-                    else
-                        Senate
-
-                newDistricts =
-                    defaultDistricts newMapType
-            in
-            ( Normal
-                { m
-                    | mapType = newMapType
-                    , districts = newDistricts
-                }
-            , Cmd.none
-            )
+        ( WindowResized width, Normal m ) ->
+            ( Normal { m | windowWidth = width }, Cmd.none )
 
         ( Noop _, _ ) ->
             ( model, Cmd.none )
@@ -275,23 +328,14 @@ update msg model =
             ( model, Cmd.none )
 
 
-
--- setDistrictsQueryParam : String -> Url -> Url
--- setDistrictsQueryParam districts url =
---     { url | query =
---         case url.query of
---             Nothing ->
---                 Just ("districts=" ++ districts)
---             Just q ->
---                 Url.Parser.parse (replacementParser "districts" districts)
---     }
-
-
 subscriptions : Model -> Sub Msg
-subscriptions model =
-    setDistrictParty
-        (\( n, party ) -> DistrictPartyChanged n party)
-        (\_ -> FatalErrorOccurred "Invalid value passed into setDistrictParty port.")
+subscriptions _ =
+    Sub.batch
+        [ setDistrictParty
+            (\( n, party ) -> DistrictPartyChanged n party)
+            (\_ -> Noop "Invalid value passed into setDistrictParty port.")
+        , windowResized WindowResized (\_ -> Noop "Invalid data sent to windowResized port.")
+        ]
 
 
 onUrlRequest : UrlRequest -> Msg

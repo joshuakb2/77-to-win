@@ -1,4 +1,4 @@
-port module Ports exposing (consoleError, setDistrictParty, writeLocalStorage)
+port module Ports exposing (consoleError, setDistrictParty, windowResized, writeLocalStorage)
 
 import DataTypes exposing (Party, partyDecoder)
 import Json.Decode as D exposing (Decoder)
@@ -12,6 +12,9 @@ port consoleErrorPort : Value -> Cmd msg
 
 
 port setDistrictPartyPort : (Value -> msg) -> Sub msg
+
+
+port windowResizedPort : (Value -> msg) -> Sub msg
 
 
 writeLocalStorage : String -> Value -> Cmd msg
@@ -55,3 +58,10 @@ setDistrictPartyDecoder =
 decrement : Int -> Int
 decrement n =
     n - 1
+
+
+windowResized : (Int -> msg) -> (D.Error -> msg) -> Sub msg
+windowResized onResized onProgrammerError =
+    windowResizedPort <|
+        fork onResized onProgrammerError
+            << D.decodeValue D.int

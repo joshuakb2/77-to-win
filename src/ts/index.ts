@@ -7,13 +7,17 @@ init = function() {
         flags: {
             width: window.innerWidth,
             height: window.innerHeight,
-            districts: tryParse(localStorage.getItem('districts')),
+            parties: tryParse(localStorage.getItem('parties')),
             timezoneOffset: new Date().getTimezoneOffset()
         }
     });
 
     subscribeToPort('writeLocalStorage', writeLocalStorage);
     subscribeToPort('consoleError', console.error);
+
+    window.onresize = () => {
+        sendToPort('windowResized', window.innerWidth);
+    };
 };
 
 function tryParse(s: any) {

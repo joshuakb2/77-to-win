@@ -4,6 +4,8 @@ export type WorkerRequest = {
     height: number;
     mapType: MapType;
     firstNumNeeded: number;
+} | {
+    type: 'halt'
 };
 
 export type WorkerResponse = {
@@ -14,6 +16,8 @@ export type WorkerResponse = {
     mapType: MapType;
     districtNum: number;
     pathData: string;
-}
+} | {
+    type: 'halted'
+};
 
 export type MapType = 'senate' | 'house' | 'education' | 'congress';

@@ -9,8 +9,7 @@ export default {
         globals: {
             'd3': 'd3',
             'topojson-client': 'topojson'
-        },
-
+        }
     },
     external: [ 'd3', 'topojson-client' ],
     plugins: [ typescript() ]

@@ -1,8 +1,7 @@
-import * as d3 from 'd3';
-import { Feature, Geometry, GeoJsonProperties } from 'geojson';
-import * as topojson from 'topojson-client';
-
 import './globals';
+import { getDistrictCount, range } from './sharedFunctions';
+import { onWorkerResponse, submitWorkerRequest } from './workerInterface';
+import { MapType } from './workerTypes';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -12,18 +11,74 @@ export const republican = Symbol('republican');
 export type Party = typeof democrat | typeof republican;
 export interface District {
     party: Party;
-    path: SVGPathElement;
     num: number;
 }
+
+type PathStatus = PathPending | PathPresent;
+
+interface PathPending {
+    type: 'pending';
+}
+
+interface PathPresent {
+    type: 'present';
+    path: SVGPathElement;
+};
+
+const districtPaths = new Map<MapType, Map<number, PathStatus>>();
+const dataUpdateListeners = new Set<() => void>();
+
+onWorkerResponse(response => {
+    switch (response.type) {
+        case 'error':
+            console.error('Worker error: ' + response.message);
+            break;
+
+        case 'pathCalculated': {
+            let svgPath = getSvgPath(response.pathData);
+
+            let districtsInThisMap = districtPaths.get(response.mapType);
+
+            if (!districtsInThisMap) {
+                districtsInThisMap = new Map();
+                districtPaths.set(response.mapType, districtsInThisMap);
+            }
+
+            let pathStatus = districtsInThisMap.get(response.districtNum);
+
+            if (pathStatus) {
+                switch (pathStatus.type) {
+                    case 'pending':
+                        break;
+
+                    case 'present':
+                        return;
+                }
+            }
+
+            districtsInThisMap.set(response.districtNum, {
+                type: 'present',
+                path: svgPath
+            });
+
+            dataUpdateListeners.forEach(f => f());
+        }   break;
+    }
+});
+
+type RenderState = 'none' | 'loading' | 'rendered';
 
 class MapOfTexas extends HTMLElement {
     districtInfos: District[] | undefined;
     connected: boolean;
+    onDistrictsUpdated: () => void;
+    renderState: RenderState;
 
     constructor() {
         super();
         this.attachShadow({ mode: 'open' });
         this.connected = false;
+        this.renderState = 'none';
     }
 
     connectedCallback() {
@@ -35,12 +90,25 @@ class MapOfTexas extends HTMLElement {
             throw new Error('Invalid districts!');
         }
 
+        this.onDistrictsUpdated = () => {
+            this.update();
+        };
+
+        dataUpdateListeners.add(this.onDistrictsUpdated);
+
         this.districtInfos = parseDistricts(districts);
-        this.redraw();
+        this.update();
     }
 
     disconnectedCallback() {
         this.connected = false;
+        this.renderState = 'none';
+        this.shadowRoot!.innerHTML = '';
+        dataUpdateListeners.delete(this.onDistrictsUpdated);
+    }
+
+    static get observedAttributes() {
+        return [ 'width', 'height', 'districts', 'map-type' ];
     }
 
     attributeChangedCallback(name: string, oldValue: string, newValue: string) {
@@ -55,16 +123,22 @@ class MapOfTexas extends HTMLElement {
         switch (name) {
             case 'width':
             case 'height':
-                this.redraw();
+                this.renderState = 'none';
+                districtPaths.clear();
+                this.update();
+                break;
+
+            case 'map-type':
+                this.renderState = 'none';
+                this.update();
                 break;
 
             case 'districts':
-                if (oldValue.length !== newValue.length) {
-                    this.districtInfos = parseDistricts(newValue);
-                    this.redraw();
+                if (newValue.length === oldValue.length) {
+                    this.diffDistricts(newValue);
                 }
                 else {
-                    this.diffDistricts(newValue);
+                    this.districtInfos = parseDistricts(newValue);
                 }
                 break;
         }
@@ -72,16 +146,19 @@ class MapOfTexas extends HTMLElement {
 
     diffDistricts(newDistricts: string) {
         for (let i = 0; i < newDistricts.length; i++) {
+            let districtStatus = districtPaths.get(this.getAttribute('map-type') as MapType)?.get(i + 1);
+            let path = districtStatus?.type === 'present' ? districtStatus.path : null;
+
             if (newDistricts[i] === 'D') {
                 if (this.districtInfos![i].party === republican) {
                     this.districtInfos![i].party = democrat;
-                    this.districtInfos![i].path.setAttributeNS(null, 'fill', 'blue');
+                    path?.setAttributeNS(null, 'fill', 'blue');
                 }
             }
             else if (newDistricts[i] === 'R') {
                 if (this.districtInfos![i].party === democrat) {
                     this.districtInfos![i].party = republican;
-                    this.districtInfos![i].path.setAttributeNS(null, 'fill', 'red');
+                    path?.setAttributeNS(null, 'fill', 'red');
                 }
             }
             else {
@@ -90,93 +167,137 @@ class MapOfTexas extends HTMLElement {
         }
     }
 
-    redraw() {
+    update() {
+        let mapType = this.getAttribute('map-type') as MapType | null;
+
+        if (!mapType) {
+            return;
+        }
+
+        if (!allDistrictsArePresent(mapType)) {
+            this.showLoading();
+            this.requestDistrictPaths();
+            return;
+        }
+
+        this.render();
+    }
+
+    showLoading() {
+        let mapType: MapType = this.getAttribute('map-type') as MapType;
+
+        if (this.renderState === 'loading') {
+            this.shadowRoot!.querySelector('#loading-span')!.textContent = getLoadingText(mapType);
+        };
+
+        this.shadowRoot!.innerHTML = `
+            <div style="width: ${this.getAttribute('width')}px; height: ${this.getAttribute('height')}px; text-align: center;">
+                <span id="loading-span" style="font-size: 24pt">${getLoadingText(mapType)}</span>
+            </div>
+        `;
+        this.renderState = 'loading';
+    }
+
+    requestDistrictPaths() {
+        let mapType = this.getAttribute('map-type') as MapType | null;
+        let width = this.getAttribute('width');
+        let height = this.getAttribute('height');
+
+        if (!mapType || !width || !height) return;
+
+        let districtsByNum = districtPaths.get(mapType);
+
+        if (!districtsByNum) {
+            districtsByNum = new Map();
+            districtPaths.set(mapType, districtsByNum);
+        }
+
+        let districtCount = getDistrictCount(mapType);
+        let firstNumNeeded = Math.min(
+            range(districtCount)
+                .map(n => n + 1)
+                .find(n => districtsByNum?.get(n)?.type !== 'present')
+                ?? 1
+        );
+
+        submitWorkerRequest({
+            type: 'calculatePath',
+            width: +width,
+            height: +height,
+            mapType,
+            firstNumNeeded
+        });
+
+        for (let n = firstNumNeeded; n <= districtCount; n++) {
+            districtsByNum.set(n, { type: 'pending' });
+        }
+    }
+
+    render() {
+        if (this.renderState === 'rendered') return;
+
         const shadow = this.shadowRoot;
 
         if (!shadow) {
             throw new Error('No shadow root!');
         }
 
-        shadow.innerHTML = '';
+        let mapType = this.getAttribute('map-type') as MapType | null;
+        let width = this.getAttribute('width');
+        let height = this.getAttribute('height');
 
-        if (!map) {
-            throw new Error('No map of Texas!');
-        }
-
-        let mapOfTexas = map;
-
-        let texasGeo = topojson.mesh(mapOfTexas);
-
-        let width = +(this.getAttribute('width') ?? 0);
-        let height = +(this.getAttribute('height') ?? 0);
-
-        if (width <= 0 || height <= 0) {
-            throw new Error('Invalid dimensions!!!');
-        }
-
-        let svg = document.createElementNS(SVG_NS, 'svg');
-        svg.setAttributeNS(null, 'width', `${width}`);
-        svg.setAttributeNS(null, 'height', `${height}`);
-        svg.style.border = 'solid black 1px';
-        let center = d3.geoCentroid(texasGeo);
-        let projection = d3.geoMercator().center(center).fitSize([width, height], texasGeo);
-        let tunedProjection = projection.scale(0.99 * projection.scale());
-        let tunedPath = d3.geoPath().projection(tunedProjection);
-
-        let districts = mapOfTexas.objects.districts;
-
-        if (districts.type !== 'GeometryCollection') {
-            console.error('Expected districts to be a GeometryCollection, but it\'s a ' + districts.type + '!');
+        if (!mapType || !width || !height) {
             return;
         }
 
-        let districtGeos = districts.geometries.map(district =>
-            topojson.feature(mapOfTexas, district)
-        );
+        shadow.innerHTML = '';
 
-        if (!districtGeos.every(isTopoFeature)) {
-            throw new Error('Map data contains a district that is not a Geometry.');
-        }
+        let svg = document.createElementNS(SVG_NS, 'svg');
+        svg.setAttributeNS(null, 'width', width);
+        svg.setAttributeNS(null, 'height', height);
+        svg.style.border = 'solid black 1px';
 
-        districtGeos.sort((a, b) => {
-            return (+a.properties!.SLDUST) - (+b.properties!.SLDUST);
-        });
+        districtPaths.get(mapType)!.forEach((status, num) => {
+            let { path } = (status as PathPresent);
+            let districtInfo = this.districtInfos![num - 1];
 
-        if (!this.districtInfos) {
-            throw new Error('No district data!');
-        }
+            path.setAttributeNS(null, 'fill', districtInfo.party === democrat ? 'blue' : 'red');
 
-        for (let [ districtInfo, districtGeo ] of zip(this.districtInfos, districtGeos)) {
-            let districtPathData = tunedPath(districtGeo);
-
-            if (!districtPathData) {
-                console.error('Failed to generate path data for a district!');
-                return;
-            }
-
-            districtInfo.path.setAttributeNS(null, 'd', districtPathData);
-            districtInfo.path.setAttributeNS(null, 'fill', districtInfo.party === democrat ? 'blue' : 'red');
-            districtInfo.path.setAttributeNS(null, 'stroke', 'white');
-            districtInfo.path.setAttributeNS(null, 'stroke-linejoin', '2');
-
-            districtInfo.path.style.cursor = 'pointer';
-
-            districtInfo.path.onclick = () => {
+            path.onclick = () => {
                 sendToPort('setDistrictParty', {
                     districtNum: districtInfo.num,
                     newParty: districtInfo.party === republican ? 'democrat' : 'republican'
                 });
             };
 
-            svg.appendChild(districtInfo.path);
-        }
+            svg.appendChild(path);
+        });
 
         shadow.appendChild(svg);
+        this.renderState = 'rendered';
     }
+}
 
-    static get observedAttributes() {
-        return [ 'width', 'height', 'districts' ];
-    }
+function getPresentDistrictsCount(mapType: MapType): number {
+    let districtStatuses = districtPaths.get(mapType);
+    let statusesArray = districtStatuses ? Array.from(districtStatuses.values()) : [];
+
+    return statusesArray.filter(status => status.type === 'present').length;
+}
+
+function allDistrictsArePresent(mapType: MapType): boolean {
+    return getPresentDistrictsCount(mapType) === getDistrictCount(mapType);
+}
+
+function getSvgPath(d: string): SVGPathElement {
+    let path = document.createElementNS(SVG_NS, 'path');
+
+    path.setAttributeNS(null, 'd', d);
+    path.setAttributeNS(null, 'stroke', 'white');
+    path.setAttributeNS(null, 'stroke-linejoin', '2');
+    path.style.cursor = 'pointer';
+
+    return path;
 }
 
 function parseDistricts(str: string): District[] {
@@ -192,19 +313,8 @@ function parseDistricts(str: string): District[] {
     });
 }
 
-function isTopoFeature(x: any): x is Feature<Geometry, GeoJsonProperties> {
-    return x.type == 'Feature';
-}
-
-function zip<A, B>(a: A[], b: B[]): [A, B][] {
-    let length = Math.min(a.length, b.length);
-    let r: [A, B][] = [];
-
-    for (let i = 0; i < length; i++) {
-        r[i] = [ a[i], b[i] ];
-    }
-
-    return r;
+function getLoadingText(mapType: MapType): string {
+    return `Loading... ${getPresentDistrictsCount(mapType)}/${getDistrictCount(mapType)} districts`;
 }
 
 window.customElements.define('map-of-texas', MapOfTexas);

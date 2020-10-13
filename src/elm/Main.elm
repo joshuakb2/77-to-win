@@ -9,8 +9,9 @@ import Element exposing (Attribute, Element, el, text)
 import Element.Background as Background
 import Element.Border as Border
 import Element.Font as Font
+import Element.Input as Input
 import Html exposing (Html)
-import Html.Attributes exposing (attribute)
+import Html.Attributes exposing (attribute, default)
 import Json.Decode as D exposing (Decoder, Value)
 import Json.Encode as E
 import Ports exposing (consoleError, setDistrictParty, writeLocalStorage)
@@ -37,40 +38,79 @@ type Model
         , districts : Array Party
         , windowWidth : Int
         , currentUrl : Url
+        , mapType : MapType
         }
+
+
+type MapType
+    = Senate
+    | House
+    | Congress
+
+
+mapTypeToString : MapType -> String
+mapTypeToString mapType =
+    case mapType of
+        Senate ->
+            "senate"
+
+        House ->
+            "house"
+
+        Congress ->
+            "congress"
+
+
+districtCount : MapType -> Int
+districtCount mapType =
+    case mapType of
+        Senate ->
+            31
+
+        House ->
+            150
+
+        Congress ->
+            36
 
 
 type Msg
     = DistrictPartyChanged Int Party
+    | MapToggled
     | FatalErrorOccurred String
     | Noop String
 
 
-flagDecoder : Decoder ( Int, Array Party )
-flagDecoder =
+flagDecoder : MapType -> Decoder ( Int, Array Party )
+flagDecoder mapType =
     D.map2 Tuple.pair
         (D.field "width" D.int)
         (D.oneOf
             [ D.field "districts" partyStringDecoder
-            , D.succeed defaultDistricts
+            , D.succeed (defaultDistricts mapType)
             ]
         )
 
 
-defaultDistricts : Array Party
-defaultDistricts =
-    Array.initialize 36 (always Republican)
+defaultDistricts : MapType -> Array Party
+defaultDistricts mapType =
+    Array.initialize (districtCount mapType) (always Republican)
 
 
 init : Value -> Url -> Nav.Key -> ( Model, Cmd Msg )
 init flags url key =
-    case D.decodeValue flagDecoder flags of
+    let
+        mapType =
+            Senate
+    in
+    case D.decodeValue (flagDecoder mapType) flags of
         Ok ( width, districts ) ->
             ( Normal
                 { key = key
                 , districts = districts
                 , windowWidth = width
                 , currentUrl = url
+                , mapType = mapType
                 }
             , Cmd.none
             )
@@ -92,6 +132,7 @@ view model =
                 ]
                 [ header
                 , mainContent model
+                , toggleMapButton
                 , footer
                 ]
     }
@@ -141,9 +182,18 @@ mainContent model =
                         [ attribute "width" "800"
                         , attribute "height" "800"
                         , attribute "districts" (getDistrictsString m.districts)
+                        , attribute "map-type" (mapTypeToString m.mapType)
                         ]
                     )
                 )
+
+
+toggleMapButton : Element Msg
+toggleMapButton =
+    Input.button []
+        { label = text "Toggle loaded map"
+        , onPress = Just MapToggled
+        }
 
 
 pageAttrs : List (Attribute msg)
@@ -196,6 +246,26 @@ update msg model =
 
                 -- , Nav.replaceUrl m.key (Url.toString (setDistrictsQueryParam newDistrictsString m.currentUrl))
                 ]
+            )
+
+        ( MapToggled, Normal m ) ->
+            let
+                newMapType =
+                    if m.mapType == Senate then
+                        House
+
+                    else
+                        Senate
+
+                newDistricts =
+                    defaultDistricts newMapType
+            in
+            ( Normal
+                { m
+                    | mapType = newMapType
+                    , districts = newDistricts
+                }
+            , Cmd.none
             )
 
         ( Noop _, _ ) ->

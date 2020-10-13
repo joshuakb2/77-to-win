@@ -239,7 +239,7 @@ class MapOfTexas extends HTMLElement {
         }
 
         let districtCount = getDistrictCount(mapType);
-        let firstNumNeeded = Math.min(
+        let firstNumNeeded = (
             range(districtCount)
                 .map(n => n + 1)
                 .find(n => districtsByNum?.get(n)?.type !== 'present')

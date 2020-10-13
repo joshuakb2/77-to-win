@@ -1,8 +1,6 @@
-import './globals';
 import { WorkerRequest, WorkerResponse } from './workerTypes';
 
-worker = new Worker('./worker.js');
-
+const worker = new Worker('./worker.js');
 const listeners = new Set<(response: WorkerResponse) => void>();
 
 worker.onmessage = e => {
@@ -12,10 +10,6 @@ worker.onmessage = e => {
 };
 
 export function submitWorkerRequest(req: WorkerRequest): void {
-    if (!worker) {
-        throw new Error('The worker does not exist!');
-    }
-
     worker.postMessage(req);
 }
 

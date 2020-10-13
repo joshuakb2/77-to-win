@@ -1,5 +1,6 @@
 import * as d3 from 'd3-geo';
 import { GeoProjection } from 'd3-geo';
+import { Feature, Geometry } from 'geojson';
 import * as topojson from 'topojson-client';
 import { Topology, Objects, GeometryObject } from 'topojson-specification';
 import { getDistrictCount } from './sharedFunctions';
@@ -13,6 +14,7 @@ import { MapType, WorkerRequest, WorkerResponse } from './workerTypes';
 
 const maps = new Map<MapType, Topology<TexasMapObjects>>();
 const promisesForMaps = new Map<MapType, Promise<Topology<TexasMapObjects>>>();
+const districtGeosByMapType = new Map<MapType, Map<number, Feature<Geometry, TexasMapProperties>>>();
 
 var previousWidth = 0;
 var previousHeight = 0;
@@ -79,27 +81,44 @@ onerror = function(err) {
 
 async function calculatePath(requestToken: Symbol, mapType: MapType, districtNum: number, width: number, height: number) {
     let map = await getMap(mapType);
-
     let tunedProjection = getTunedProjection(map, width, height);
     let tunedPath = d3.geoPath().projection(tunedProjection);
 
-    let districts = map.objects.districts;
+    let districtGeos = districtGeosByMapType.get(mapType);
 
-    if (districts.type !== 'GeometryCollection') {
-        console.error('Expected districts to be a GeometryCollection, but it\'s a ' + districts.type + '!');
-        return;
+    if (!districtGeos) {
+        districtGeos = new Map();
+        districtGeosByMapType.set(mapType, districtGeos);
     }
 
-    let district = districts.geometries.find(district => getDistrictNum(mapType, district) == districtNum);
+    let districtGeo = districtGeos.get(districtNum);
 
-    if (!district) {
-        throw new Error(`Map "${mapType}" has no district ${districtNum}.`);
-    }
+    if (!districtGeo) {
+        let districts = map.objects.districts;
 
-    let districtGeo = topojson.feature(map, district);
+        if (districts.type !== 'GeometryCollection') {
+            console.error('Expected districts to be a GeometryCollection, but it\'s a ' + districts.type + '!');
+            return;
+        }
 
-    if (districtGeo.type !== 'Feature') {
-        throw new Error(`Map "${mapType}" district ${districtNum} is not a Feature.`);
+        let district = districts.geometries.find(district => getDistrictNum(mapType, district) == districtNum);
+
+        if (!district) {
+            throw new Error(`Map "${mapType}" has no district ${districtNum}.`);
+        }
+
+        if (district.type !== 'Polygon') {
+            console.error(`Expected district ${districtNum} of map "${mapType}" to be a Polygon, but it's a ${districts.type}!`);
+            return;
+        }
+
+        districtGeo = topojson.feature(map, district);
+
+        if (districtGeo.type !== 'Feature') {
+            throw new Error(`Map "${mapType}" district ${districtNum} is not a Feature.`);
+        }
+
+        districtGeos.set(districtNum, districtGeo);
     }
 
     let districtPathData = tunedPath(districtGeo);

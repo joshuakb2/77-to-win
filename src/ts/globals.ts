@@ -26,7 +26,6 @@ declare global {
     var Elm: Elm;
     var elmApp: ElmApp | undefined;
     var init: (() => void) | undefined;
-    var worker: Worker | undefined;
 
     function sendToPort(name: string, value: any): void;
     function subscribeToPort(name: string, callback: Function): void;
@@ -34,7 +33,6 @@ declare global {
 
 window.elmApp = undefined;
 window.init = undefined;
-window.worker = undefined;
 
 // These functions are safer than trying to use a port directly
 // because if a port isn't used in the Elm code, it doesn't end up

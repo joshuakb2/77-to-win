@@ -4,7 +4,7 @@ import Array exposing (Array)
 import Browser exposing (Document, UrlRequest(..), application)
 import Browser.Dom exposing (Element)
 import Browser.Navigation as Nav
-import DataTypes exposing (AllMapsParties, MapType(..), Party(..), allMapsPartiesDecoder, defaultAllMapsParties, encodeAllMapsParties, mapTypeToString)
+import DataTypes exposing (AllMapsParties, MapType(..), Party(..), allMapsPartiesDecoder, defaultAllMapsParties, defaultParties, encodeAllMapsParties, mapTypeToString)
 import Element exposing (Attribute, Color, Element, el, text)
 import Element.Border as Border
 import Element.Font as Font
@@ -47,6 +47,7 @@ type Msg
     = DistrictPartyChanged Int Party
     | MapChosen MapType
     | WindowResized Int
+    | ResetPartiesButtonClicked
     | FatalErrorOccurred String
     | Noop String
 
@@ -117,7 +118,7 @@ header =
 footer : Element msg
 footer =
     el
-        [ Font.size 10
+        [ Font.size 12
         , Element.centerX
         , Element.alignBottom
         ]
@@ -171,8 +172,12 @@ mainContent model =
 
         Normal m ->
             let
-                parties =
+                maybeParties =
                     getPartiesForMapType m.mapType m.parties
+
+                effectiveParties =
+                    maybeParties
+                        |> Maybe.withDefault (defaultParties m.mapType)
 
                 mapSide =
                     String.fromInt (getMapWidth m.windowWidth)
@@ -181,14 +186,35 @@ mainContent model =
                 [ Element.spacing 10
                 ]
                 [ mapSelector m
-                , partyTallyElement parties
+                , partyTallyElement effectiveParties
                 , mapOfTexas
                     [ attribute "width" mapSide
                     , attribute "height" mapSide
-                    , attribute "districts" (getDistrictsString parties)
+                    , attribute "districts" (getDistrictsString effectiveParties)
                     , attribute "map-type" (mapTypeToString m.mapType)
                     ]
+                , customOrActual maybeParties
                 ]
+
+
+customOrActual : Maybe (Array Party) -> Element Msg
+customOrActual maybeParties =
+    let
+        content =
+            case maybeParties of
+                Nothing ->
+                    text "Showing actual parties for each district"
+
+                Just _ ->
+                    Element.column []
+                        [ text "Showing custom parties"
+                        , Input.button [ Element.centerX ]
+                            { onPress = Just ResetPartiesButtonClicked
+                            , label = text "Click here to reset"
+                            }
+                        ]
+    in
+    el [ Element.centerX ] content
 
 
 getMapWidth : Int -> Int
@@ -196,7 +222,7 @@ getMapWidth windowWidth =
     min 800 (windowWidth - 20)
 
 
-getPartiesForMapType : MapType -> AllMapsParties -> Array Party
+getPartiesForMapType : MapType -> AllMapsParties -> Maybe (Array Party)
 getPartiesForMapType mapType =
     case mapType of
         Senate ->
@@ -215,16 +241,38 @@ getPartiesForMapType mapType =
 
 
 updatePartiesForMapType : MapType -> (Array Party -> Array Party) -> AllMapsParties -> AllMapsParties
-updatePartiesForMapType mapType f parties =
+updatePartiesForMapType mapType f allMapsParties =
+    let
+        effectiveParties maybeParties =
+            case maybeParties of
+                Nothing ->
+                    defaultParties mapType
+
+                Just parties ->
+                    parties
+    in
     case mapType of
         Senate ->
-            { parties | senateParties = f parties.senateParties }
+            { allMapsParties | senateParties = Just (f (effectiveParties allMapsParties.senateParties)) }
 
         House ->
-            { parties | houseParties = f parties.houseParties }
+            { allMapsParties | houseParties = Just (f (effectiveParties allMapsParties.houseParties)) }
 
         Congress ->
-            { parties | congressParties = f parties.congressParties }
+            { allMapsParties | congressParties = Just (f (effectiveParties allMapsParties.congressParties)) }
+
+
+resetPartiesForMapType : MapType -> AllMapsParties -> AllMapsParties
+resetPartiesForMapType mapType parties =
+    case mapType of
+        Senate ->
+            { parties | senateParties = Nothing }
+
+        House ->
+            { parties | houseParties = Nothing }
+
+        Congress ->
+            { parties | congressParties = Nothing }
 
 
 
@@ -320,6 +368,13 @@ update msg model =
 
         ( WindowResized width, Normal m ) ->
             ( Normal { m | windowWidth = width }, Cmd.none )
+
+        ( ResetPartiesButtonClicked, Normal m ) ->
+            let
+                newParties =
+                    resetPartiesForMapType m.mapType m.parties
+            in
+            ( Normal { m | parties = newParties }, Cmd.none )
 
         ( Noop _, _ ) ->
             ( model, Cmd.none )

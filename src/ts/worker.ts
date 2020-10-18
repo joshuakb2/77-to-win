@@ -5,12 +5,7 @@ import * as topojson from 'topojson-client';
 import { Topology, Objects, GeometryObject } from 'topojson-specification';
 import { getDistrictCount } from './sharedFunctions';
 
-import { MapType, WorkerRequest, WorkerResponse } from './workerTypes';
-
-// importScripts(
-//     '../node_modules/d3-array/dist/d3-array.js',
-//     '../node_modules/d3-geo/dist/d3-geo.js',
-// );
+import { MapType, WorkerRequest, WorkerResponse, Zoom } from './workerTypes';
 
 const maps = new Map<MapType, Topology<TexasMapObjects>>();
 const promisesForMaps = new Map<MapType, Promise<Topology<TexasMapObjects>>>();
@@ -18,6 +13,7 @@ const districtGeosByMapType = new Map<MapType, Map<number, Feature<Geometry, Tex
 
 var previousWidth = 0;
 var previousHeight = 0;
+var previousZoom = { x: 0, y: 0, scale: 1 };
 var tunedProjection: GeoProjection | undefined = undefined;
 
 let queuedRequestsComplete = Promise.resolve();
@@ -29,12 +25,17 @@ onmessage = function(e) {
 
     switch (request.type) {
         case 'calculatePath': {
-            let { mapType, firstNumNeeded, width, height } = request;
+            let { mapType, firstNumNeeded, dims: [ width, height ], zoom } = request;
 
-            if (previousWidth !== width || previousHeight !== height) {
+            if (
+                previousWidth !== width ||
+                previousHeight !== height ||
+                zoomsDiffer(zoom, previousZoom)
+            ) {
                 tunedProjection = undefined;
                 previousWidth = width;
                 previousHeight = height;
+                previousZoom = zoom;
             }
 
             currentRequestToken = Symbol();
@@ -45,7 +46,8 @@ onmessage = function(e) {
                     mapType,
                     firstNumNeeded,
                     width,
-                    height
+                    height,
+                    zoom
                 ).catch(err => {
                     console.error(err.stack);
                 })
@@ -79,9 +81,9 @@ onerror = function(err) {
     });
 };
 
-async function calculatePath(requestToken: Symbol, mapType: MapType, districtNum: number, width: number, height: number) {
+async function calculatePath(requestToken: Symbol, mapType: MapType, districtNum: number, width: number, height: number, zoom: Zoom) {
     let map = await getMap(mapType);
-    let tunedProjection = getTunedProjection(map, width, height);
+    let tunedProjection = getTunedProjection(map, width, height, zoom);
     let tunedPath = d3.geoPath().projection(tunedProjection);
 
     let districtGeos = districtGeosByMapType.get(mapType);
@@ -140,18 +142,30 @@ async function calculatePath(requestToken: Symbol, mapType: MapType, districtNum
     if (currentRequestToken !== requestToken) return;
 
     if (districtNum < getDistrictCount(mapType)) {
-        await calculatePath(requestToken, mapType, districtNum + 1, width, height);
+        await calculatePath(requestToken, mapType, districtNum + 1, width, height, zoom);
     }
 }
 
-function getTunedProjection(map: Topology<TexasMapObjects>, width: number, height: number): GeoProjection {
+function getTunedProjection(map: Topology<TexasMapObjects>, width: number, height: number, zoom: Zoom): GeoProjection {
     if (tunedProjection) return tunedProjection;
 
     let mapGeo = topojson.mesh(map);
     let center = d3.geoCentroid(mapGeo);
     let projection = d3.geoMercator().center(center).fitSize([width, height], mapGeo);
 
-    return projection.scale(0.99 * projection.scale());
+    projection.scale(0.99 * zoom.scale * projection.scale());
+
+    let before = projection.translate();
+
+    (([ x, y ]) => projection.translate([ zoom.x * x, zoom.y * y ]))(projection.translate());;
+
+    let after = projection.translate();
+
+    console.log('Desired/default: ', [ after[0] / before[0], after[1] / before[1] ]);
+
+    tunedProjection = projection;
+
+    return projection;
 }
 
 type TexasMapObjects = Objects<TexasMapProperties>;
@@ -212,4 +226,8 @@ function yieldCpu(): Promise<void> {
     return new Promise(resolve => {
         setTimeout(resolve, 0);
     });
+}
+
+function zoomsDiffer(a: Zoom, b: Zoom): boolean {
+    return a.x !== b.x || a.y !== b.y || a.scale !== b.scale;
 }

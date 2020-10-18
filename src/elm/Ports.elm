@@ -60,8 +60,28 @@ decrement n =
     n - 1
 
 
-windowResized : (Int -> msg) -> (D.Error -> msg) -> Sub msg
+windowResized : ((Int, Int) -> msg) -> (D.Error -> msg) -> Sub msg
 windowResized onResized onProgrammerError =
     windowResizedPort <|
         fork onResized onProgrammerError
-            << D.decodeValue D.int
+            << D.decodeValue (tupleDecoder D.int D.int)
+
+
+tupleDecoder : Decoder a -> Decoder b -> Decoder (a, b)
+tupleDecoder aDecoder bDecoder =
+    D.list D.value
+    |> D.andThen (\list ->
+        case list of
+            [ aValue, bValue ] ->
+                case D.decodeValue aDecoder aValue of
+                    Err err ->
+                        D.fail ("Failed to decode item 1: " ++ D.errorToString err)
+                    Ok a ->
+                        case D.decodeValue bDecoder bValue of
+                            Err err ->
+                                D.fail ("Failed to decode item 2: " ++ D.errorToString err)
+                            Ok b ->
+                                D.succeed (a, b)
+            _ ->
+                D.fail ("Expected an array of length 2, but found one of length " ++ String.fromInt (List.length list))
+    )

@@ -1,12 +1,18 @@
 export type WorkerRequest = {
     type: 'calculatePath';
-    width: number;
-    height: number;
+    dims: [ number, number ];
+    zoom: Zoom;
     mapType: MapType;
     firstNumNeeded: number;
 } | {
     type: 'halt'
 };
+
+export interface Zoom {
+    x: number;
+    y: number;
+    scale: number;
+}
 
 export type WorkerResponse = {
     type: 'error';

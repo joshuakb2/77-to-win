@@ -16,7 +16,7 @@ init = function() {
     subscribeToPort('consoleError', console.error);
 
     window.onresize = () => {
-        sendToPort('windowResized', window.innerWidth);
+        sendToPort('windowResized', [ window.innerWidth, window.innerHeight ]);
     };
 };
 

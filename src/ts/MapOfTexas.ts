@@ -87,6 +87,10 @@ class MapOfTexas extends HTMLElement {
         this.connected = false;
         this.waitingForWorkerHalt = false;
         this.renderState = 'none';
+        this.onmousedown = e => {
+            e.preventDefault();
+            e.stopPropagation();
+        };
     }
 
     connectedCallback() {
@@ -124,7 +128,7 @@ class MapOfTexas extends HTMLElement {
     }
 
     static get observedAttributes() {
-        return [ 'width', 'height', 'districts', 'map-type' ];
+        return [ 'width', 'height', 'districts', 'map-type', 'zoom' ];
     }
 
     attributeChangedCallback(name: string, oldValue: string, newValue: string) {
@@ -137,6 +141,7 @@ class MapOfTexas extends HTMLElement {
         }
 
         switch (name) {
+            case 'zoom':
             case 'width':
             case 'height': {
                 this.renderState = 'none';
@@ -228,8 +233,11 @@ class MapOfTexas extends HTMLElement {
         let mapType = this.getAttribute('map-type') as MapType | null;
         let width = this.getAttribute('width');
         let height = this.getAttribute('height');
+        let zoom = this.getAttribute('zoom')?.split(',').map(x => +x);;
 
-        if (!mapType || !width || !height) return;
+        if (!mapType || !width || !height || !zoom || zoom.length !== 3 || zoom.some(isNaN)) return;
+
+        let [ x, y, scale ] = zoom;
 
         let districtsByNum = districtPaths.get(mapType);
 
@@ -248,8 +256,8 @@ class MapOfTexas extends HTMLElement {
 
         submitWorkerRequest({
             type: 'calculatePath',
-            width: +width,
-            height: +height,
+            dims: [ +width, +height ],
+            zoom: { x, y, scale },
             mapType,
             firstNumNeeded
         });
@@ -293,7 +301,10 @@ class MapOfTexas extends HTMLElement {
 
             path.setAttributeNS(null, 'fill', districtInfo.party === democrat ? 'blue' : 'red');
 
-            path.onclick = () => {
+            path.onclick = e => {
+                e.preventDefault();
+                e.stopPropagation();
+
                 sendToPort('setDistrictParty', {
                     districtNum: districtInfo.num,
                     newParty: districtInfo.party === republican ? 'democrat' : 'republican'

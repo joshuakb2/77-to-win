@@ -37,25 +37,37 @@ type Model
 type alias NormalModel =
     { key : Nav.Key
     , windowWidth : Int
+    , windowHeight : Int
     , currentUrl : Url
     , mapType : MapType
     , parties : AllMapsParties
+    , zoom : Zoom
     }
 
 
 type Msg
     = DistrictPartyChanged Int Party
     | MapChosen MapType
-    | WindowResized Int
+    | ZoomChosen Zoom
+    | WindowResized (Int, Int)
     | ResetPartiesButtonClicked
     | FatalErrorOccurred String
     | Noop String
 
+type Zoom
+    = ZoomTexas
+    | ZoomDFW
+    | ZoomElPaso
+    | ZoomAustin
+    | ZoomMcAllen
+    | ZoomHouston
 
-flagDecoder : Decoder ( Int, AllMapsParties )
+
+flagDecoder : Decoder ( (Int, Int), AllMapsParties )
 flagDecoder =
-    D.map2 Tuple.pair
+    D.map3 (\width height parties -> ((width, height), parties))
         (D.field "width" D.int)
+        (D.field "height" D.int)
         (onDecoderFail defaultAllMapsParties (D.field "parties" allMapsPartiesDecoder))
 
 
@@ -71,13 +83,15 @@ init flags url key =
             Senate
     in
     case D.decodeValue flagDecoder flags of
-        Ok ( width, parties ) ->
+        Ok ( (width, height), parties ) ->
             ( Normal
                 { key = key
                 , windowWidth = width
+                , windowHeight = height
                 , currentUrl = url
                 , mapType = mapType
                 , parties = parties
+                , zoom = ZoomTexas
                 }
             , Cmd.none
             )
@@ -180,7 +194,7 @@ mainContent model =
                         |> Maybe.withDefault (defaultParties m.mapType)
 
                 mapSide =
-                    String.fromInt (getMapWidth m.windowWidth)
+                    String.fromInt (getMapWidth m.windowWidth m.windowHeight)
             in
             Element.column
                 [ Element.spacing 10
@@ -192,10 +206,42 @@ mainContent model =
                     , attribute "height" mapSide
                     , attribute "districts" (getDistrictsString effectiveParties)
                     , attribute "map-type" (mapTypeToString m.mapType)
+                    , attribute "zoom" (zoomData m.zoom m.mapType)
                     ]
+                , zoomSelector m.zoom m.windowWidth
                 , customOrActual maybeParties
                 ]
 
+
+zoomSelector : Zoom -> Int -> Element Msg
+zoomSelector currentZoom maxWidth =
+    Element.wrappedRow [ Element.spacing 20, Element.centerX, Element.width (Element.maximum maxWidth Element.fill) ]
+        [ selectZoom ZoomTexas currentZoom
+        , selectZoom ZoomDFW currentZoom
+        , selectZoom ZoomElPaso currentZoom
+        , selectZoom ZoomAustin currentZoom
+        , selectZoom ZoomMcAllen currentZoom
+        , selectZoom ZoomHouston currentZoom
+        ]
+
+selectZoom : Zoom -> Zoom -> Element Msg
+selectZoom chosenZoom currentZoom =
+    Input.button (centerX ++ (sidePadding "5px") ++ (if chosenZoom == currentZoom then [ Font.underline, Font.bold ] else []))
+        { onPress = Just (ZoomChosen chosenZoom)
+        , label = text (zoomName chosenZoom)
+        }
+
+centerX : List (Attribute msg)
+centerX =
+    [ Element.htmlAttribute (Html.Attributes.style "margin-left" "auto")
+    , Element.htmlAttribute (Html.Attributes.style "margin-right" "auto")
+    ]
+
+sidePadding : String -> List (Attribute msg)
+sidePadding value =
+    [ Element.htmlAttribute (Html.Attributes.style "padding-left" value)
+    , Element.htmlAttribute (Html.Attributes.style "padding-right" value)
+    ]
 
 customOrActual : Maybe (Array Party) -> Element Msg
 customOrActual maybeParties =
@@ -217,9 +263,12 @@ customOrActual maybeParties =
     el [ Element.centerX ] content
 
 
-getMapWidth : Int -> Int
-getMapWidth windowWidth =
-    min 800 (windowWidth - 20)
+getMapWidth : Int -> Int -> Int
+getMapWidth windowWidth windowHeight =
+    min 800
+        <| min
+            (windowWidth - 20)
+            (windowHeight - 100)
 
 
 getPartiesForMapType : MapType -> AllMapsParties -> Maybe (Array Party)
@@ -286,6 +335,8 @@ pageAttrs =
         [ Font.typeface "Roboto"
         , Font.sansSerif
         ]
+    , Element.clipX
+    , Element.clipY
     ]
 
 
@@ -326,7 +377,7 @@ tallyParties parties =
 
 mapOfTexas : List (Html.Attribute msg) -> Element msg
 mapOfTexas attrs =
-    el [] <| Element.html <| Html.node "map-of-texas" attrs []
+    el [ Element.centerX ] <| Element.html <| Html.node "map-of-texas" attrs []
 
 
 getDistrictsString : Array Party -> String
@@ -366,15 +417,19 @@ update msg model =
         ( MapChosen newMapType, Normal m ) ->
             ( Normal { m | mapType = newMapType }, Cmd.none )
 
-        ( WindowResized width, Normal m ) ->
-            ( Normal { m | windowWidth = width }, Cmd.none )
+        ( WindowResized (width, height), Normal m ) ->
+            ( Normal { m | windowWidth = width, windowHeight = height }, Cmd.none )
 
         ( ResetPartiesButtonClicked, Normal m ) ->
             let
                 newParties =
                     resetPartiesForMapType m.mapType m.parties
             in
-            ( Normal { m | parties = newParties }, Cmd.none )
+            ( Normal { m | parties = newParties }
+            , writeLocalStorage "parties" (encodeAllMapsParties newParties) )
+
+        ( ZoomChosen zoom, Normal m ) ->
+            ( Normal { m | zoom = zoom }, Cmd.none)
 
         ( Noop _, _ ) ->
             ( model, Cmd.none )
@@ -406,3 +461,26 @@ onUrlRequest urlReq =
 onUrlChange : Url -> Msg
 onUrlChange url =
     Noop ("URL changed to " ++ Url.toString url)
+
+zoomName : Zoom -> String
+zoomName zoom =
+    case zoom of
+        ZoomTexas -> "Texas"
+        ZoomDFW -> "DFW"
+        ZoomElPaso -> "El Paso"
+        ZoomAustin -> "Austin"
+        ZoomMcAllen -> "McAllen"
+        ZoomHouston -> "Houston"
+
+zoomData : Zoom -> MapType -> String
+zoomData zoom mapType =
+    case zoom of
+        ZoomTexas -> "1,1,1"
+        ZoomDFW -> "-0.022050140437043914,2.4377098256322998,5"
+        ZoomElPaso -> "4.679380505573358,1.23961830427205,4"
+        ZoomAustin -> "0.6933849578688869,-0.43770982563229965,6"
+        ZoomMcAllen -> "0.6933849578688869, -1.6358013469925492,4"
+        ZoomHouston ->
+            if mapType == Senate
+            then "-1.7595353791800188,-0.6773281299043497,7"
+            else "-1.4424264569648262,-0.717414979839807,7"

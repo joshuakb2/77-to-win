@@ -58,8 +58,8 @@ type Zoom
     = ZoomTexas
     | ZoomDFW
     | ZoomElPaso
-    | ZoomAustin
-    | ZoomMcAllen
+    | ZoomCentral
+    | ZoomRGV
     | ZoomHouston
 
 
@@ -198,6 +198,7 @@ mainContent model =
             in
             Element.column
                 [ Element.spacing 10
+                , Element.centerX
                 ]
                 [ mapSelector m
                 , partyTallyElement effectiveParties
@@ -208,7 +209,7 @@ mainContent model =
                     , attribute "map-type" (mapTypeToString m.mapType)
                     , attribute "zoom" (zoomData m.zoom m.mapType)
                     ]
-                , zoomSelector m.zoom m.windowWidth
+                , zoomSelector m.zoom (m.windowWidth - 40)
                 , customOrActual maybeParties
                 ]
 
@@ -219,8 +220,8 @@ zoomSelector currentZoom maxWidth =
         [ selectZoom ZoomTexas currentZoom
         , selectZoom ZoomDFW currentZoom
         , selectZoom ZoomElPaso currentZoom
-        , selectZoom ZoomAustin currentZoom
-        , selectZoom ZoomMcAllen currentZoom
+        , selectZoom ZoomCentral currentZoom
+        , selectZoom ZoomRGV currentZoom
         , selectZoom ZoomHouston currentZoom
         ]
 
@@ -468,8 +469,8 @@ zoomName zoom =
         ZoomTexas -> "Texas"
         ZoomDFW -> "DFW"
         ZoomElPaso -> "El Paso"
-        ZoomAustin -> "Austin"
-        ZoomMcAllen -> "McAllen"
+        ZoomCentral -> "Central Texas"
+        ZoomRGV -> "RGV"
         ZoomHouston -> "Houston"
 
 zoomData : Zoom -> MapType -> String
@@ -478,8 +479,8 @@ zoomData zoom mapType =
         ZoomTexas -> "1,1,1"
         ZoomDFW -> "-0.022050140437043914,2.4377098256322998,5"
         ZoomElPaso -> "4.679380505573358,1.23961830427205,4"
-        ZoomAustin -> "0.6933849578688869,-0.43770982563229965,6"
-        ZoomMcAllen -> "0.6933849578688869, -1.6358013469925492,4"
+        ZoomCentral -> "0.6933849578688869,-0.43770982563229965,6"
+        ZoomRGV -> "0.6933849578688869, -1.6358013469925492,4"
         ZoomHouston ->
             if mapType == Senate
             then "-1.7595353791800188,-0.6773281299043497,7"
